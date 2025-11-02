@@ -1,5 +1,10 @@
 // Countdown target - designs reset at 12AM US Central Time every 2 days
-export const getNextRotationDate = () => {
+// If config is provided and has a nextDropDate, use that instead
+export const getNextRotationDate = (config?: { nextDropDate?: string | null }) => {
+  // Use custom date if provided
+  if (config?.nextDropDate) {
+    return new Date(config.nextDropDate).toISOString()
+  }
   // Get current time
   const now = new Date()
   

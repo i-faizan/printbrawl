@@ -1,18 +1,8 @@
 import { NextResponse, NextRequest } from 'next/server'
-import fs from 'fs/promises'
-import path from 'path'
+import clientPromise from '@/app/lib/mongodb'
 
-const ANALYTICS_FILE = path.join(process.cwd(), 'data', 'analytics.json')
-
-// Ensure data directory exists
-async function ensureDataDir() {
-  const dataDir = path.join(process.cwd(), 'data')
-  try {
-    await fs.access(dataDir)
-  } catch {
-    await fs.mkdir(dataDir, { recursive: true })
-  }
-}
+const DB_NAME = 'printbrawl'
+const ANALYTICS_COLLECTION = 'analytics'
 
 // Middleware to check authentication
 function checkAuth(request: NextRequest): boolean {
@@ -28,13 +18,15 @@ interface AnalyticsEvent {
   timestamp: string
   design?: 'A' | 'B'
   element?: string
+  link?: string
+  sessionId?: string
+  userId?: string
   value?: number
 }
 
 // POST - Track analytics event
 export async function POST(request: Request) {
   try {
-    await ensureDataDir()
     const body: AnalyticsEvent = await request.json()
     
     // Validate event
@@ -42,26 +34,21 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Invalid event data' }, { status: 400 })
     }
 
-    // Read existing analytics
-    let analytics: AnalyticsEvent[] = []
-    try {
-      const data = await fs.readFile(ANALYTICS_FILE, 'utf-8')
-      analytics = JSON.parse(data)
-    } catch {
-      // File doesn't exist, start fresh
-    }
-
-    // Add new event
-    analytics.push(body)
-
-    // Keep only last 30 days of data
-    const thirtyDaysAgo = Date.now() - (30 * 24 * 60 * 60 * 1000)
-    analytics = analytics.filter(
-      event => new Date(event.timestamp).getTime() > thirtyDaysAgo
-    )
-
-    // Save analytics
-    await fs.writeFile(ANALYTICS_FILE, JSON.stringify(analytics, null, 2))
+    const client = await clientPromise()
+    const db = client.db(DB_NAME)
+    const collection = db.collection(ANALYTICS_COLLECTION)
+    
+    // Insert event
+    await collection.insertOne({
+      ...body,
+      createdAt: new Date(body.timestamp)
+    })
+    
+    // Cleanup old events (older than 30 days)
+    const thirtyDaysAgo = new Date(Date.now() - (30 * 24 * 60 * 60 * 1000))
+    await collection.deleteMany({
+      createdAt: { $lt: thirtyDaysAgo }
+    })
     
     return NextResponse.json({ success: true })
   } catch (error) {
@@ -78,48 +65,34 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
     
-    await ensureDataDir()
-    
     const { searchParams } = new URL(request.url)
     const days = parseInt(searchParams.get('days') || '7')
     
-    // Read analytics
-    let analytics: AnalyticsEvent[] = []
-    try {
-      const data = await fs.readFile(ANALYTICS_FILE, 'utf-8')
-      analytics = JSON.parse(data)
-    } catch {
-      return NextResponse.json({
-        pageviews: [],
-        clicks: [],
-        purchases: [],
-        summary: {
-          totalPageviews: 0,
-          totalClicks: 0,
-          totalPurchases: 0,
-          designAClicks: 0,
-          designBClicks: 0,
-          designAPurchases: 0,
-          designBPurchases: 0
-        },
-        recent: {
-          pageviews: [],
-          clicks: [],
-          purchases: []
-        }
-      })
-    }
-
-    // Filter by date range
-    const cutoffDate = Date.now() - (days * 24 * 60 * 60 * 1000)
-    const filtered = analytics.filter(
-      event => new Date(event.timestamp).getTime() > cutoffDate
-    )
+    const client = await clientPromise()
+    const db = client.db(DB_NAME)
+    const collection = db.collection(ANALYTICS_COLLECTION)
+    
+    // Calculate cutoff date
+    const cutoffDate = new Date(Date.now() - (days * 24 * 60 * 60 * 1000))
+    
+    // Get filtered events
+    const events = await collection.find({
+      createdAt: { $gte: cutoffDate }
+    }).sort({ createdAt: -1 }).toArray()
+    
+    // Convert to AnalyticsEvent format
+    const analytics: AnalyticsEvent[] = events.map((e: any) => {
+      const { _id, createdAt, ...event } = e
+      return {
+        ...event,
+        timestamp: event.timestamp || createdAt.toISOString()
+      }
+    })
 
     // Separate by type
-    const pageviews = filtered.filter(e => e.type === 'pageview')
-    const clicks = filtered.filter(e => e.type === 'click')
-    const purchases = filtered.filter(e => e.type === 'purchase')
+    const pageviews = analytics.filter(e => e.type === 'pageview')
+    const clicks = analytics.filter(e => e.type === 'click')
+    const purchases = analytics.filter(e => e.type === 'purchase')
 
     // Calculate summary
     const designAClicks = clicks.filter(e => e.design === 'A').length
@@ -165,14 +138,12 @@ export async function DELETE(request: NextRequest) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
     
-    await ensureDataDir()
+    const client = await clientPromise()
+    const db = client.db(DB_NAME)
+    const collection = db.collection(ANALYTICS_COLLECTION)
     
-    // Clear analytics file
-    await fs.writeFile(ANALYTICS_FILE, JSON.stringify({
-      pageviews: [],
-      clicks: [],
-      purchases: []
-    }))
+    // Clear all analytics
+    await collection.deleteMany({})
     
     return NextResponse.json({ success: true, message: 'All analytics data cleared' })
   } catch (error) {
@@ -206,4 +177,3 @@ function groupByDate(events: AnalyticsEvent[], days: number): { date: string; co
     .map(([date, count]) => ({ date, count }))
     .sort((a, b) => a.date.localeCompare(b.date))
 }
-

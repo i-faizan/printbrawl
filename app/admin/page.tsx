@@ -21,6 +21,7 @@ interface Config {
   price: string
   heroText: string
   features: string[]
+  nextDropDate?: string | null
 }
 
 interface AnalyticsData {
@@ -986,6 +987,55 @@ export default function AdminPanel() {
                 className="w-full px-4 py-2 rounded-lg bg-gray-700 border border-gray-600 focus:border-green-500 focus:outline-none"
               />
             </div>
+          </div>
+        </div>
+
+        {/* Next Drop Date */}
+        <div className="mb-8 rounded-lg border border-gray-700 bg-gray-800 p-6">
+          <h2 className="text-2xl font-bold mb-6 flex items-center gap-2">
+            <Clock className="h-6 w-6 text-yellow-400" />
+            Next Drop Date
+          </h2>
+          <div className="space-y-4">
+            <div>
+              <label className="block text-sm font-semibold mb-2">Custom Next Drop Date & Time</label>
+              <p className="text-xs text-gray-400 mb-3">
+                Leave empty to use automatic calculation (12AM US Central Time every 2 days). 
+                Set a custom date to override the automatic calculation.
+              </p>
+              <input
+                type="datetime-local"
+                value={config.nextDropDate ? new Date(config.nextDropDate).toISOString().slice(0, 16) : ''}
+                onChange={(e) => {
+                  const value = e.target.value
+                  setConfig({ 
+                    ...config, 
+                    nextDropDate: value ? new Date(value).toISOString() : null 
+                  })
+                }}
+                className="w-full px-4 py-2 rounded-lg bg-gray-700 border border-gray-600 focus:border-yellow-500 focus:outline-none"
+              />
+            </div>
+            {config.nextDropDate && (
+              <div className="p-4 rounded-lg bg-gray-700 border border-gray-600">
+                <p className="text-sm text-gray-300 mb-2">
+                  <strong>Current Custom Date:</strong>
+                </p>
+                <p className="text-lg font-bold text-yellow-400">
+                  {new Date(config.nextDropDate).toLocaleString('en-US', {
+                    timeZone: 'America/Chicago',
+                    dateStyle: 'full',
+                    timeStyle: 'long'
+                  })}
+                </p>
+                <button
+                  onClick={() => setConfig({ ...config, nextDropDate: null })}
+                  className="mt-3 px-4 py-2 rounded-lg bg-red-600 hover:bg-red-700 transition text-sm"
+                >
+                  Clear Custom Date (Use Automatic)
+                </button>
+              </div>
+            )}
           </div>
         </div>
 

@@ -1,18 +1,8 @@
 import { NextResponse, NextRequest } from 'next/server'
-import fs from 'fs/promises'
-import path from 'path'
+import clientPromise from '@/app/lib/mongodb'
 
-const CONFIG_FILE = path.join(process.cwd(), 'data', 'config.json')
-
-// Ensure data directory exists
-async function ensureDataDir() {
-  const dataDir = path.join(process.cwd(), 'data')
-  try {
-    await fs.access(dataDir)
-  } catch {
-    await fs.mkdir(dataDir, { recursive: true })
-  }
-}
+const DB_NAME = 'printbrawl'
+const CONFIG_COLLECTION = 'config'
 
 // Middleware to check authentication
 function checkAuth(request: NextRequest): boolean {
@@ -26,11 +16,20 @@ function checkAuth(request: NextRequest): boolean {
 // GET - Read config
 export async function GET(request: NextRequest) {
   try {
-    await ensureDataDir()
-    const data = await fs.readFile(CONFIG_FILE, 'utf-8')
-    return NextResponse.json(JSON.parse(data))
-  } catch {
-    // Return default config if file doesn't exist
+    const client = await clientPromise()
+    const db = client.db(DB_NAME)
+    const collection = db.collection(CONFIG_COLLECTION)
+    
+    // Try to get config, if not found return default
+    const config = await collection.findOne({ _id: 'main' } as any)
+    
+    if (config) {
+      // Remove _id from response
+      const { _id, ...configData } = config as any
+      return NextResponse.json(configData)
+    }
+    
+    // Return default config if not found
     const defaultConfig = {
       designA: {
         name: "Design A",
@@ -56,9 +55,13 @@ export async function GET(request: NextRequest) {
         "Military-grade shock absorption keeps your phone safe from drops and impacts.",
         "Compatible with iPhone & Samsung models. Precise cutouts for all ports and buttons.",
         "Durable TPU with polycarbonate backing. Lightweight, slim, and built to last."
-      ]
+      ],
+      nextDropDate: null
     }
     return NextResponse.json(defaultConfig)
+  } catch (error) {
+    console.error('Config error:', error)
+    return NextResponse.json({ error: 'Failed to load config' }, { status: 500 })
   }
 }
 
@@ -71,7 +74,6 @@ export async function PUT(request: NextRequest) {
     }
     
     const body = await request.json()
-    await ensureDataDir()
     
     // Validate required fields
     if (!body.designA || !body.designB || !body.price) {
@@ -79,6 +81,7 @@ export async function PUT(request: NextRequest) {
     }
     
     const config = {
+      _id: 'main',
       designA: {
         name: body.designA.name || "Design A",
         image: body.designA.image || "",
@@ -95,13 +98,26 @@ export async function PUT(request: NextRequest) {
       },
       price: body.price || "24.99",
       heroText: body.heroText || "",
-      features: body.features || []
+      features: body.features || [],
+      nextDropDate: body.nextDropDate || null
     }
     
-    await fs.writeFile(CONFIG_FILE, JSON.stringify(config, null, 2))
-    return NextResponse.json({ success: true, config })
+    const client = await clientPromise()
+    const db = client.db(DB_NAME)
+    const collection = db.collection(CONFIG_COLLECTION)
+    
+    // Upsert config
+    await collection.updateOne(
+      { _id: 'main' } as any,
+      { $set: config } as any,
+      { upsert: true }
+    )
+    
+    // Remove _id from response
+    const { _id, ...configData } = config
+    return NextResponse.json({ success: true, config: configData })
   } catch (error) {
+    console.error('Config update error:', error)
     return NextResponse.json({ error: 'Failed to update config' }, { status: 500 })
   }
 }
-

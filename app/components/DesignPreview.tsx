@@ -4,8 +4,9 @@ import { Smartphone, Zap } from 'lucide-react'
 import ClickTracker from './ClickTracker'
 
 interface Config {
-  designA: { name: string; image: string; mockups: string[]; purchases: number; link: string; price: string }
-  designB: { name: string; image: string; mockups: string[]; purchases: number; link: string; price: string }
+  designA: { name: string; image: string; mockups: string[]; purchases: number; link: string }
+  designB: { name: string; image: string; mockups: string[]; purchases: number; link: string }
+  price: string
 }
 
 interface DesignPreviewProps {

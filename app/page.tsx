@@ -14,28 +14,23 @@ interface Config {
   price: string;
   heroText: string;
   features: string[];
+  nextDropDate?: string | null;
 }
 
 async function getConfig(): Promise<Config> {
   try {
-    const fs = await import('fs/promises')
-    const path = await import('path')
-    const dataDir = path.join(process.cwd(), 'data')
-    const configFile = path.join(dataDir, 'config.json')
-    
-    // Ensure data directory exists
-    try {
-      await fs.access(dataDir)
-    } catch {
-      await fs.mkdir(dataDir, { recursive: true })
+    // Fetch from API (which uses MongoDB)
+    const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || (typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3000')
+    const res = await fetch(`${baseUrl}/api/config`, {
+      cache: 'no-store'
+    })
+    if (res.ok) {
+      return res.json()
     }
-    
-    try {
-      const data = await fs.readFile(configFile, 'utf-8')
-      return JSON.parse(data)
-    } catch {
-      // File doesn't exist, return defaults
-      return {
+    throw new Error('Failed to fetch config')
+  } catch (error) {
+    // Fallback to defaults if API fails
+    return {
       designA: { 
         name: "Design A", 
         image: "https://images.unsplash.com/photo-1611262588024-d12430b98920?w=400&h=800&fit=crop&q=80", 
@@ -56,14 +51,15 @@ async function getConfig(): Promise<Config> {
         "Military-grade shock absorption keeps your phone safe from drops and impacts.",
         "Compatible with iPhone & Samsung models. Precise cutouts for all ports and buttons.",
         "Durable TPU with polycarbonate backing. Lightweight, slim, and built to last."
-      ]
+      ],
+      nextDropDate: null
     }
   }
 }
 
 export default async function Page() {
   const config = await getConfig()
-  const nextRotation = getNextRotationDate()
+  const nextRotation = getNextRotationDate(config)
 
   const designAPurchases = config.designA.purchases
   const designBPurchases = config.designB.purchases

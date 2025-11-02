@@ -1,0 +1,25 @@
+[
+  {
+    "sessionId": "sess_1762094165250_6nwors5fq",
+    "userId": "user_1762094165250_xsqk6mlle",
+    "startTime": "2025-11-02T17:06:30.089Z",
+    "lastActivity": "2025-11-02T17:06:58.485Z",
+    "referrer": null,
+    "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36",
+    "screenWidth": 1680,
+    "screenHeight": 1050,
+    "timezone": "Asia/Kuala_Lumpur",
+    "language": "en-GB",
+    "scrollDepth": 100,
+    "maxScrollDepth": 100,
+    "timeOnPage": 28,
+    "clicks": [],
+    "pageViews": 1,
+    "exitIntent": true,
+    "deviceType": "desktop",
+    "ipAddress": "::1",
+    "country": null,
+    "city": null,
+    "endTime": "2025-11-02T17:06:58.485Z"
+  }
+]

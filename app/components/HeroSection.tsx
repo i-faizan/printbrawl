@@ -76,7 +76,7 @@ export default function HeroSection({ config }: HeroSectionProps) {
           <div className="grid grid-cols-1 items-start gap-10 md:grid-cols-2">
             
             {/* Left column on desktop / Top on mobile: Two case previews */}
-            <DesignPreview config={{ ...config, price: config.price }} onImageClick={handleImageClick} />
+            <DesignPreview config={config} onImageClick={handleImageClick} />
 
             {/* Right column on desktop / Bottom on mobile: Copy + Counters + CTAs */}
             <div className="order-2 md:order-1">

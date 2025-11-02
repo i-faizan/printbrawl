@@ -1,17 +1,8 @@
 import { NextResponse, NextRequest } from 'next/server'
-import fs from 'fs/promises'
-import path from 'path'
+import clientPromise from '@/app/lib/mongodb'
 
-const SESSIONS_FILE = path.join(process.cwd(), 'data', 'sessions.json')
-
-async function ensureDataDir() {
-  const dataDir = path.join(process.cwd(), 'data')
-  try {
-    await fs.access(dataDir)
-  } catch {
-    await fs.mkdir(dataDir, { recursive: true })
-  }
-}
+const DB_NAME = 'printbrawl'
+const SESSIONS_COLLECTION = 'sessions'
 
 // Middleware to check authentication
 function checkAuth(request: NextRequest): boolean {
@@ -55,7 +46,6 @@ interface UserSession {
 // POST - Create new session
 export async function POST(request: NextRequest) {
   try {
-    await ensureDataDir()
     const body = await request.json()
     
     const session: UserSession = {
@@ -82,22 +72,36 @@ export async function POST(request: NextRequest) {
       city: body.city || null
     }
 
-    let sessions: UserSession[] = []
-    try {
-      const data = await fs.readFile(SESSIONS_FILE, 'utf-8')
-      sessions = JSON.parse(data)
-    } catch {
-      // File doesn't exist, start fresh
+    const client = await clientPromise()
+    const db = client.db(DB_NAME)
+    const collection = db.collection(SESSIONS_COLLECTION)
+    
+    // Check if session already exists
+    const existing = await collection.findOne({ sessionId: session.sessionId } as any)
+    if (existing) {
+      // Update existing session
+      await collection.updateOne(
+        { sessionId: session.sessionId } as any,
+        { $set: { 
+          lastActivity: session.lastActivity,
+          pageViews: (existing as any).pageViews + 1
+        } as any}
+      )
+      const { _id, createdAt, ...existingData } = existing as any
+      return NextResponse.json({ success: true, session: existingData })
     }
-
-    // Remove old sessions (older than 30 days)
-    const thirtyDaysAgo = Date.now() - (30 * 24 * 60 * 60 * 1000)
-    sessions = sessions.filter(
-      s => new Date(s.startTime).getTime() > thirtyDaysAgo
-    )
-
-    sessions.push(session)
-    await fs.writeFile(SESSIONS_FILE, JSON.stringify(sessions, null, 2))
+    
+    // Insert new session
+    await collection.insertOne({
+      ...session,
+      createdAt: new Date(session.startTime)
+    } as any)
+    
+    // Cleanup old sessions (older than 30 days)
+    const thirtyDaysAgo = new Date(Date.now() - (30 * 24 * 60 * 60 * 1000))
+    await collection.deleteMany({
+      createdAt: { $lt: thirtyDaysAgo }
+    })
     
     return NextResponse.json({ success: true, session })
   } catch (error) {
@@ -109,41 +113,46 @@ export async function POST(request: NextRequest) {
 // PUT - Update existing session
 export async function PUT(request: NextRequest) {
   try {
-    await ensureDataDir()
     const body = await request.json()
     
-    let sessions: UserSession[] = []
-    try {
-      const data = await fs.readFile(SESSIONS_FILE, 'utf-8')
-      sessions = JSON.parse(data)
-    } catch {
-      return NextResponse.json({ error: 'No sessions found' }, { status: 404 })
-    }
-
-    const sessionIndex = sessions.findIndex(s => s.sessionId === body.sessionId)
-    if (sessionIndex === -1) {
+    const client = await clientPromise()
+    const db = client.db(DB_NAME)
+    const collection = db.collection(SESSIONS_COLLECTION)
+    
+    const session = await collection.findOne({ sessionId: body.sessionId } as any)
+    if (!session) {
       return NextResponse.json({ error: 'Session not found' }, { status: 404 })
     }
 
-    const session = sessions[sessionIndex]
     const now = new Date().toISOString()
+    const update: any = {
+      lastActivity: now
+    }
     
     // Update session based on type
     if (body.type === 'scroll') {
-      session.scrollDepth = body.data.scrollDepth || 0
-      session.maxScrollDepth = Math.max(session.maxScrollDepth, session.scrollDepth)
+      const scrollDepth = body.data.scrollDepth || 0
+      update.scrollDepth = scrollDepth
+      update.maxScrollDepth = Math.max(session.maxScrollDepth || 0, scrollDepth)
     } else if (body.type === 'click') {
-      session.clicks.push({
+      const newClick = {
         timestamp: body.timestamp || now,
         element: body.data.element || '',
         design: body.data.design,
         type: body.data.type || 'click',
         link: body.data.link
-      })
+      }
+      await collection.updateOne(
+        { sessionId: body.sessionId } as any,
+        { $push: { clicks: newClick } } as any
+      )
+      const updatedSession = await collection.findOne({ sessionId: body.sessionId } as any)
+      const { _id: updatedId, createdAt: updatedCreatedAt, ...updatedSessionData } = updatedSession as any
+      return NextResponse.json({ success: true, session: updatedSessionData })
     } else if (body.type === 'exit') {
-      session.exitIntent = true
-      session.endTime = now
-      session.timeOnPage = Math.floor(
+      update.exitIntent = true
+      update.endTime = now
+      update.timeOnPage = Math.floor(
         (new Date(now).getTime() - new Date(session.startTime).getTime()) / 1000
       )
     } else if (body.type === 'activity') {
@@ -151,18 +160,20 @@ export async function PUT(request: NextRequest) {
       const timeDiff = Math.floor(
         (new Date(now).getTime() - new Date(session.startTime).getTime()) / 1000
       )
-      session.timeOnPage = timeDiff
-      session.lastActivity = now
+      update.timeOnPage = timeDiff
     } else if (body.type === 'pageview') {
-      session.pageViews++
+      update.pageViews = (session.pageViews || 1) + 1
     }
 
-    session.lastActivity = now
-
-    sessions[sessionIndex] = session
-    await fs.writeFile(SESSIONS_FILE, JSON.stringify(sessions, null, 2))
+    await collection.updateOne(
+      { sessionId: body.sessionId } as any,
+      { $set: update } as any
+    )
     
-    return NextResponse.json({ success: true, session })
+    const updatedSession = await collection.findOne({ sessionId: body.sessionId } as any)
+    const { _id, createdAt, ...sessionData } = updatedSession as any
+    
+    return NextResponse.json({ success: true, session: sessionData })
   } catch (error) {
     console.error('Session update error:', error)
     return NextResponse.json({ error: 'Failed to update session' }, { status: 500 })
@@ -177,60 +188,59 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
     
-    await ensureDataDir()
-    
     const { searchParams } = new URL(request.url)
     const days = parseInt(searchParams.get('days') || '7')
     const limit = parseInt(searchParams.get('limit') || '100')
     
-    let sessions: UserSession[] = []
-    try {
-      const data = await fs.readFile(SESSIONS_FILE, 'utf-8')
-      sessions = JSON.parse(data)
-    } catch {
-      return NextResponse.json({ sessions: [], summary: getEmptySummary() })
-    }
-
-    // Filter by date range
-    const cutoffDate = Date.now() - (days * 24 * 60 * 60 * 1000)
-    let filtered = sessions.filter(
-      s => new Date(s.startTime).getTime() > cutoffDate
-    )
-
-    // Sort by start time (newest first) and limit
-    filtered.sort((a, b) => 
-      new Date(b.startTime).getTime() - new Date(a.startTime).getTime()
-    )
-    filtered = filtered.slice(0, limit)
+    const client = await clientPromise()
+    const db = client.db(DB_NAME)
+    const collection = db.collection(SESSIONS_COLLECTION)
+    
+    // Calculate cutoff date
+    const cutoffDate = new Date(Date.now() - (days * 24 * 60 * 60 * 1000))
+    
+    // Get filtered sessions
+    const sessions = await collection.find({
+      createdAt: { $gte: cutoffDate }
+    })
+    .sort({ createdAt: -1 })
+    .limit(limit)
+    .toArray()
+    
+    // Remove MongoDB _id and createdAt from response
+    const filtered = sessions.map((s: any) => {
+      const { _id, createdAt, ...session } = s
+      return session
+    })
 
     // Calculate summary statistics
     const summary = {
       totalSessions: filtered.length,
-      uniqueUsers: new Set(filtered.map(s => s.userId)).size,
+      uniqueUsers: new Set(filtered.map((s: UserSession) => s.userId)).size,
       avgTimeOnPage: filtered.length > 0
-        ? Math.round(filtered.reduce((sum, s) => sum + s.timeOnPage, 0) / filtered.length)
+        ? Math.round(filtered.reduce((sum: number, s: UserSession) => sum + s.timeOnPage, 0) / filtered.length)
         : 0,
       avgScrollDepth: filtered.length > 0
-        ? Math.round(filtered.reduce((sum, s) => sum + s.maxScrollDepth, 0) / filtered.length)
+        ? Math.round(filtered.reduce((sum: number, s: UserSession) => sum + s.maxScrollDepth, 0) / filtered.length)
         : 0,
-      totalClicks: filtered.reduce((sum, s) => sum + s.clicks.length, 0),
+      totalClicks: filtered.reduce((sum: number, s: UserSession) => sum + s.clicks.length, 0),
       exitIntentRate: filtered.length > 0
-        ? Math.round((filtered.filter(s => s.exitIntent).length / filtered.length) * 100)
+        ? Math.round((filtered.filter((s: UserSession) => s.exitIntent).length / filtered.length) * 100)
         : 0,
       deviceBreakdown: {
-        mobile: filtered.filter(s => s.deviceType === 'mobile').length,
-        tablet: filtered.filter(s => s.deviceType === 'tablet').length,
-        desktop: filtered.filter(s => s.deviceType === 'desktop').length
+        mobile: filtered.filter((s: UserSession) => s.deviceType === 'mobile').length,
+        tablet: filtered.filter((s: UserSession) => s.deviceType === 'tablet').length,
+        desktop: filtered.filter((s: UserSession) => s.deviceType === 'desktop').length
       },
-      referrerBreakdown: filtered.reduce((acc: { [key: string]: number }, s) => {
+      referrerBreakdown: filtered.reduce((acc: { [key: string]: number }, s: UserSession) => {
         const ref = s.referrer || 'Direct'
         acc[ref] = (acc[ref] || 0) + 1
         return acc
       }, {}),
-      designAClicks: filtered.reduce((sum, s) => 
+      designAClicks: filtered.reduce((sum: number, s: UserSession) => 
         sum + s.clicks.filter(c => c.design === 'A').length, 0
       ),
-      designBClicks: filtered.reduce((sum, s) => 
+      designBClicks: filtered.reduce((sum: number, s: UserSession) => 
         sum + s.clicks.filter(c => c.design === 'B').length, 0
       )
     }
@@ -250,10 +260,12 @@ export async function DELETE(request: NextRequest) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
     
-    await ensureDataDir()
+    const client = await clientPromise()
+    const db = client.db(DB_NAME)
+    const collection = db.collection(SESSIONS_COLLECTION)
     
-    // Clear sessions file
-    await fs.writeFile(SESSIONS_FILE, JSON.stringify([]))
+    // Clear all sessions
+    await collection.deleteMany({})
     
     return NextResponse.json({ success: true, message: 'All sessions data cleared' })
   } catch (error) {
@@ -261,19 +273,3 @@ export async function DELETE(request: NextRequest) {
     return NextResponse.json({ error: 'Failed to clear sessions' }, { status: 500 })
   }
 }
-
-function getEmptySummary() {
-  return {
-    totalSessions: 0,
-    uniqueUsers: 0,
-    avgTimeOnPage: 0,
-    avgScrollDepth: 0,
-    totalClicks: 0,
-    exitIntentRate: 0,
-    deviceBreakdown: { mobile: 0, tablet: 0, desktop: 0 },
-    referrerBreakdown: {},
-    designAClicks: 0,
-    designBClicks: 0
-  }
-}
-
